@@ -39,15 +39,17 @@ def evaluate(description):
     if cfg.MODEL.ADAPTATION == "pace":
         logger.info("test-time adaptation: PACE")
         model = setup_pace(base_model)
-    # evaluate on each severity and type of corruption in turn
+     # evaluate on each severity and type of corruption in turn
     for severity in cfg.CORRUPTION.SEVERITY:
-        for corruption_type in cfg.CORRUPTION.TYPE:
-            # reset adaptation for each combination of corruption x severity
-            # note: for evaluation protocol, but not necessarily needed
-            try:
-                model.reset()
-                logger.info("resetting model")
-            except:
+        for i_c, corruption_type in enumerate(cfg.CORRUPTION.TYPE):
+            # continual adaptation for all corruption 
+            if i_c == 0:
+                try:
+                    model.reset()
+                    logger.info("resetting model")
+                except:
+                    logger.warning("not resetting model")
+            else:
                 logger.warning("not resetting model")
             x_test, y_test = load_cifar10c(cfg.CORRUPTION.NUM_EX,
                                            severity, cfg.DATA_DIR, False,
