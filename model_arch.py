@@ -47,11 +47,11 @@ class WideResNetWithDropout(WideResNet):
     def forward(self, x, dropout_rate=0.0):
         out = self.conv1(x)
         out = self.block1(out)
-        out = F.dropout(out, p=dropout_rate, training=self.training)
+        out = F.dropout(out, p=dropout_rate, training=True) # let dropout always work despite the model mode
         out = self.block2(out)
-        out = F.dropout(out, p=dropout_rate, training=self.training)
+        out = F.dropout(out, p=dropout_rate, training=True)
         out = self.block3(out)
-        out = F.dropout(out, p=dropout_rate, training=self.training)
+        out = F.dropout(out, p=dropout_rate, training=True)
         out = self.relu(self.bn1(out))
         out = F.avg_pool2d(out, 8)
         out = out.view(-1, self.nChannels)

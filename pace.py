@@ -14,15 +14,13 @@ def get_max_entropy(n_classes):
     return e_max
 
 def dropout_inference(x, model, n_iter=5, dropout_rate=0.4): #  n_iter可选5/10
+        model.eval() # use global stats (and dropout layer is always in train mode)
         with torch.no_grad():
-            # source model inference w/o dropout
-            model.eval() 
-            outputs = model(x, dropout_rate=0.0) # (batch_size, n_classes
+            outputs = model(x, dropout_rate=0.0) # source model inference w/o dropout (batch_size, n_classes
             curr_pred = torch.argmax(outputs, dim=1) # batch_size
             # curr_conf = torch.max(F.softmax(outputs, dim=1), dim=1)[0] # batch_size
 
             # Dropout inference sampling
-            model.train()
             x_expanded = x.repeat(n_iter, 1, 1, 1) # n_iter * batch_size, ...
             predictions = model(x_expanded, dropout_rate=dropout_rate) # n_iter * batch_size, n_classes
             predictions = F.softmax(predictions, dim=-1) 
@@ -151,15 +149,14 @@ def collect_params(model):
 def configure_model_adapter(model, reduction):
     model_adapter = WideResNetWithAdapter(reduction=reduction)
     model_adapter.load_state_dict(model.state_dict(), strict=False)
-    model_adapter.train()
-    # disable grad, to (re-)enable only what we update
+    model_adapter.eval() # use global stats
     model_adapter.requires_grad_(False)
     for m in model_adapter.modules():
-        # Ensure BatchNorm layers use train-time global statistics
-        if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-            # force use of batch stats in train and eval modes
-            m.track_running_stats = True  
-            m.momentum = 0
+        # if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+        #     # force use of batch stats in train and eval modes
+        #     m.track_running_stats = False
+        #     m.running_mean = None
+        #     m.running_var = None         
         if isinstance(m, Adapter):
             m.requires_grad_(True)
     return model_adapter
@@ -168,19 +165,18 @@ def configure_model_adapter(model, reduction):
 def configure_model_dropout(model):
     model_dropout = WideResNetWithDropout()
     model_dropout.load_state_dict(model.state_dict(), strict=False)
-    model_dropout.train() # for dropout inference
+    model_dropout.eval() # use global stats
     model_dropout.requires_grad_(False)
-    for m in model_dropout.modules():
-        if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-            # force use of batch stats in train and eval modes
-            m.track_running_stats = True  
-            m.momentum = 0
+    # for m in model_dropout.modules():
+    #     if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+    #         # force use of source stats in train and eval modes
+    #         m.track_running_stats = True  
+    #         m.momentum = 0
     return model_dropout
 
 
 def check_model(model):
-    is_training = model.training
-    assert is_training, "pace needs train mode: call model.train()"
+    assert not model.training, "pace needs eval mode to use global stats: call model.eval()"
     
     param_grads = [p.requires_grad for p in model.parameters()]
     has_any_params = any(param_grads)
@@ -197,6 +193,8 @@ def check_model(model):
             adapter_param_grads = [p.requires_grad for p in m.parameters()]
             assert all(adapter_param_grads), f"Adapter {nm} parameters should have requires_grad=True"
         # Ensure BatchNorm layers are in eval mode
+        elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+            assert not m.training, f"BatchNorm layer {nm} should be in eval mode"
         else:
             module_param_grads = [p.requires_grad for p in m.parameters()]
             assert not any(module_param_grads), f"Non-Adapter module {nm} should not have requires_grad=True"
