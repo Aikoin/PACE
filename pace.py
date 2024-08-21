@@ -37,7 +37,7 @@ def dropout_inference(x, model, n_iter=5, dropout_rate=0.4): #  n_iter可选5/10
             pred = torch.argmax(predictions, dim=2).permute(1, 0) # batch_size, n_iter 批次样本在每个iter的预测标记（索引     
             # match_ratio = (curr_pred.unsqueeze(dim=1).repeat(1, n_iter) == pred)a / n_iter # batch_size 每个样本在所有iter的平均匹配率
             # acc = match_ratio.mean() # 所有样本在所有iter的匹配率
-            err = (curr_pred.unsqueeze(dim=1).repeat(1, n_iter) != pred).mean(dtype=torch.float64)
+            err = (curr_pred.unsqueeze(dim=1).repeat(1, n_iter) != pred).float().mean(dtype=torch.float64)
         
         return err.item(), e_avg.item(), e_max.item(), n_classes
 
@@ -62,7 +62,8 @@ class PACE(nn.Module):
         # Create model_adapter and model_dropout using deepcopy to avoid unintended parameter sharing
         self.model_adapter = model_adapter
         self.model_dropout = model_dropout
-
+        
+        self.transform = get_tta_transforms()
         self.n_iter = n_iter
         self.dropout_rate = dropout_rate
 
@@ -80,10 +81,10 @@ class PACE(nn.Module):
             err_est = err_estimation(x, self.model_dropout, self.n_iter, self.dropout_rate)
         
         adapter_ratio = err_est
-        print("adapter_ratio and err_est: ", adapter_ratio)
+        print("adapter_ratio: ", adapter_ratio)
 
         for _ in range(self.steps):
-            outputs = forward_and_adapt(x, self.model_adapter, self.optimizer, adapter_ratio)
+            outputs = forward_and_adapt(x, self.model_adapter, self.optimizer, self.transform, adapter_ratio)
 
         return outputs
 
@@ -94,12 +95,12 @@ class PACE(nn.Module):
                                  self.model_adapter_state, self.optimizer_state)
 
 @torch.enable_grad()  # ensure grads in possible no grad context for testing
-def forward_and_adapt(x, model, optimizer, adapter_ratio):
+def forward_and_adapt(x, model, optimizer, transform, adapter_ratio):
     """Forward and adapt model on batch of data.
     """
     # forward
     outputs = model(x, adapter_ratio) # adapter_ratio * adapter_out + (1 - adapter_ratio) * out
-    outputs_aug = model(get_tta_transforms(x), adapter_ratio=1.0) # adapter_out
+    outputs_aug = model(transform(x), adapter_ratio=1.0) # adapter_out
     
     # adapt
     optimizer.zero_grad()
@@ -144,7 +145,6 @@ def collect_params(model):
                 if ('weight' in np or 'bias' in np) and p.requires_grad:  
                     params.append(p)
                     names.append(f"{nm}.{np}")
-                    print(nm, np)
     return params, names
 
 
@@ -179,7 +179,6 @@ def configure_model_dropout(model):
 
 
 def check_model(model):
-    """Check model for compatability with tent."""
     is_training = model.training
     assert is_training, "pace needs train mode: call model.train()"
     
@@ -192,7 +191,6 @@ def check_model(model):
                                "check which require grad"
     
     for nm, m in model.named_modules():
-        print("Checking module:", nm)
         if nm == '': # 根模块
             continue
         elif 'adapter' in nm: # 检查adapter模块及其子模块

@@ -125,8 +125,8 @@ def setup_pace(model):
     collect the parameters for feature modulation (Adapter) by gradient optimization,
     set up the optimizer, and then pace the model.
     """
-    model_adapter = pace.configure_model_adapter(model, cfg.TEST.REDUCTION)
-    model_dropout = pace.configure_model_dropout(model) # use source statistics in dropout inferences
+    model_adapter = pace.configure_model_adapter(model, cfg.TEST.REDUCTION).cuda()
+    model_dropout = pace.configure_model_dropout(model).cuda() # use source statistics in dropout inferences
     params, param_names = pace.collect_params(model_adapter)
     optimizer = setup_optimizer(params)
     pace_model = pace.PACE(model_adapter, model_dropout,optimizer,
@@ -136,7 +136,7 @@ def setup_pace(model):
                       n_iter=cfg.TEST.N_ITER)
     pace.check_model(pace_model.model_adapter)
 
-    logger.info(f"model for adaptation: %s", model)
+    logger.info(f"model for adaptation: %s", pace_model.model_adapter)
     logger.info(f"params for adaptation: %s", param_names)
     logger.info(f"optimizer for adaptation: %s", optimizer)   
     return pace_model
