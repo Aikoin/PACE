@@ -9,16 +9,20 @@ from model_arch import Adapter, WideResNetWithAdapter, WideResNetWithDropout
 from cotta import get_tta_transforms
 
 '''
-this version model is all in eval mode and use train-time global stats
+this version model is all in train mode and use test batch stats
 '''
 
+def get_max_entropy(n_classes):
+    prob = torch.full((n_classes,), 1.0 / n_classes)
+    e_max = -torch.sum(prob * torch.log(prob))
+    return e_max
+
 def dropout_inference(x, model, n_iter=5, dropout_rate=0.4): #  n_iter可选5/10
-        model.eval() # use global stats (and dropout layer is always in train mode)
         with torch.no_grad():
-            outputs = model(x, dropout_rate=0.0) # source model inference w/o dropout (batch_size, n_classes
+            # source model inference w/o dropout
+            outputs = model(x, dropout_rate=0.0) # (batch_size, n_classes
             curr_pred = torch.argmax(outputs, dim=1) # batch_size
-            curr_conf = torch.max(F.softmax(outputs, dim=1), dim=1)[0] # batch_size
-            print("source conf: ", curr_conf)
+            # curr_conf = torch.max(F.softmax(outputs, dim=1), dim=1)[0] # batch_size
 
             # Dropout inference sampling
             x_expanded = x.repeat(n_iter, 1, 1, 1) # n_iter * batch_size, ...
@@ -29,7 +33,7 @@ def dropout_inference(x, model, n_iter=5, dropout_rate=0.4): #  n_iter可选5/10
             total_avg = torch.mean(predictions, dim=(0,1)) # n_classes 
             n_classes = total_avg.shape[-1]
             e_avg = (-total_avg * torch.log(total_avg + 1e-6)).sum()
-            e_max = torch.log(torch.tensor(float(n_classes))) # log(n_classes)
+            e_max = get_max_entropy(n_classes)
 
             # Prediction disagreement with dropouts
             pred = torch.argmax(predictions, dim=2).permute(1, 0) # batch_size, n_iter 批次样本在每个iter的预测标记（索引     
@@ -40,8 +44,8 @@ def dropout_inference(x, model, n_iter=5, dropout_rate=0.4): #  n_iter可选5/10
 
 def err_estimation(x, model, n_iter, dropout_rate):
     err, e_avg, e_max, n_classes = dropout_inference(x, model, n_iter, dropout_rate)
-    print("err: ", err, "\ne_avg: ", e_avg)
-    est_err = err / ((e_avg / e_max) ** 3) # AETTA
+    print("err: ", err, "e_avg: ", e_avg)
+    est_err = err / (e_avg / e_max) ** 3 # AETTA
     est_err = max(0., min(1. - 1. / n_classes, est_err))
     return est_err
     
@@ -148,9 +152,16 @@ def collect_params(model):
 def configure_model_adapter(model, reduction):
     model_adapter = WideResNetWithAdapter(reduction=reduction)
     model_adapter.load_state_dict(model.state_dict(), strict=False)
-    model_adapter.eval() # use global stats
+    model_adapter.train()
+    # disable grad, to (re-)enable only what we update
     model_adapter.requires_grad_(False)
     for m in model_adapter.modules():
+        # Ensure BatchNorm layers use train-time global statistics
+        if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+            # force use of batch stats in train and eval modes
+            m.track_running_stats = False
+            m.running_mean = None
+            m.running_var = None  
         if isinstance(m, Adapter):
             m.requires_grad_(True)
     return model_adapter
@@ -159,13 +170,20 @@ def configure_model_adapter(model, reduction):
 def configure_model_dropout(model):
     model_dropout = WideResNetWithDropout()
     model_dropout.load_state_dict(model.state_dict(), strict=False)
-    model_dropout.eval() # use global stats
+    model_dropout.train() # for dropout inference
     model_dropout.requires_grad_(False)
+    for m in model_dropout.modules():
+        if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+            # force use of batch stats in train and eval modes
+            m.track_running_stats = False
+            m.running_mean = None
+            m.running_var = None  
     return model_dropout
 
 
 def check_model(model):
-    assert not model.training, "pace needs eval mode to use global stats: call model.eval()"
+    is_training = model.training
+    assert is_training, "pace needs train mode: call model.train()"
     
     param_grads = [p.requires_grad for p in model.parameters()]
     has_any_params = any(param_grads)
@@ -182,14 +200,9 @@ def check_model(model):
             adapter_param_grads = [p.requires_grad for p in m.parameters()]
             assert all(adapter_param_grads), f"Adapter {nm} parameters should have requires_grad=True"
         # Ensure BatchNorm layers are in eval mode
-        elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-            assert not m.training, f"BatchNorm layer {nm} should be in eval mode"
         else:
             module_param_grads = [p.requires_grad for p in m.parameters()]
             assert not any(module_param_grads), f"Non-Adapter module {nm} should not have requires_grad=True"
     
     has_adapter = any([isinstance(m, Adapter) for m in model.modules()])
     assert has_adapter, "pace needs Adapter for its optimization"
-
-def print_bn_stats(layer, name):
-    print(f"{name} - running_mean: {layer.running_mean}, running_var: {layer.running_var}, tracking_running_stats: {layer.track_running_stats}")
