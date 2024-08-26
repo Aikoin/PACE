@@ -34,9 +34,12 @@ class WideResNetWithAdapter(WideResNet):
         out = F.avg_pool2d(out, 8)
         out = out.view(-1, self.nChannels)
 
+        # adapter_out = self.fc(self.adapter(out))
+        # out = self.fc(out)
+        # return adapter_ratio * adapter_out + (1 - adapter_ratio) * out
+
         adapter_out = self.adapter(out)
         out = adapter_ratio * adapter_out + (1 - adapter_ratio) * out
-
         return self.fc(out)
 
 

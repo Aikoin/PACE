@@ -131,7 +131,7 @@ def setup_pace(model):
     model_dropout = pace.configure_model_dropout(model).cuda() # use source statistics in dropout inferences
     params, param_names = pace.collect_params(model_adapter)
     optimizer = setup_optimizer(params)
-    pace_model = pace.PACE(model_adapter, model_dropout,optimizer,
+    pace_model = pace.PACE(model_adapter, model_dropout, optimizer,
                       steps=cfg.OPTIM.STEPS,
                       episodic=cfg.MODEL.EPISODIC,
                       dropout_rate=cfg.TEST.DROPOUT_RATE,
