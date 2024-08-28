@@ -46,7 +46,7 @@ def err_estimation(x, model, n_iter, dropout_rate):
     err, e_avg, e_max, n_classes = dropout_inference(x, model, n_iter, dropout_rate)
     est_err = err / (e_avg / e_max) ** 3 # AETTA
     est_err = max(0., min(1. - 1. / n_classes, est_err))
-    print("err: ", err, "e_avg: ", e_avg, "est_err: ", est_err)
+    # print("err: ", err, "e_avg: ", e_avg, "est_err: ", est_err)
     return est_err
     
 
@@ -67,6 +67,7 @@ class PACE(nn.Module):
         self.transform = get_tta_transforms()
         self.n_iter = n_iter
         self.dropout_rate = dropout_rate
+        self.ema_est_err = None
 
         # note: if the model is never reset, like for continual adaptation,
         # then skipping the state copy would save memory
@@ -79,9 +80,15 @@ class PACE(nn.Module):
 
         # 在这里做dropout inference，得到batch err/acc估计，然后用这个作为adapter_ratio
         with torch.no_grad():
-            err_est = err_estimation(x, self.model_dropout, self.n_iter, self.dropout_rate)      
+            est_err = err_estimation(x, self.model_dropout, self.n_iter, self.dropout_rate)
+            if self.ema_est_err is None:
+                self.ema_est_err = est_err
+            else:
+                self.ema_est_err = 0.6 * self.ema_est_err + 0.4 * est_err
             
-            adapter_ratio = err_est
+            adapter_ratio = self.ema_est_err
+            # adapter_ratio = est_err
+            print("adapter_ratio: ", adapter_ratio)
 
         for _ in range(self.steps):
             outputs = forward_and_adapt(x, self.model_adapter, self.optimizer, self.transform, adapter_ratio)
